@@ -18,7 +18,7 @@ import { pickModel } from "./ui/model-picker.js";
 import { openSettings } from "./ui/settings-panel.js";
 import { loadWorkspaceModel, saveWorkspaceModel } from "./workspace-config.js";
 import type { Sensitivity } from "./types.js";
-import { Type } from "@sinclair/typebox";
+
 
 /**
  * Extract partial reasoning text from the supervisor's streaming JSON response.
@@ -338,84 +338,6 @@ export default function (pi: ExtensionAPI) {
         `Supervisor active: "${trimmed.slice(0, 50)}${trimmed.length > 50 ? "…" : ""}" | ${provider}/${modelId} | ${promptLabel}`,
         "info"
       );
-    },
-  });
-
-  // ---- Tool: model can initiate supervision but never modify an active session ----
-
-  pi.registerTool({
-    name: "start_supervision",
-    label: "Start Supervision",
-    description:
-      "Activate the supervisor to track the conversation toward a specific outcome. " +
-      "The supervisor will observe every turn and steer the agent if it drifts. " +
-      "Once supervision is active it is locked — only the user can change or stop it.",
-    parameters: Type.Object({
-      outcome: Type.String({
-        description:
-          "The desired end-state to supervise toward. Be specific and measurable " +
-          "(e.g. 'Implement JWT auth with refresh tokens and full test coverage').",
-      }),
-      sensitivity: Type.Optional(Type.Union([
-        Type.Literal("low"),
-        Type.Literal("medium"),
-        Type.Literal("high"),
-      ], {
-        description:
-          "How aggressively to steer. low = only when seriously off track, " +
-          "medium = on mild drift (default), high = proactively + mid-turn checks.",
-      })),
-      model: Type.Optional(Type.String({
-        description:
-          "Supervisor model as 'provider/modelId' (e.g. 'anthropic/claude-haiku-4-5-20251001'). " +
-          "Defaults to workspace config, then the active chat model.",
-      })),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-      const text = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], details: undefined });
-
-      // Guard: supervision already active — model cannot modify it
-      if (state.isActive()) {
-        const s = state.getState()!;
-        return text(
-          `Supervision is already active and cannot be changed by the model.\n` +
-          `Active outcome: "${s.outcome}"\n` +
-          `Only the user can stop or modify supervision via /supervise.`
-        );
-      }
-
-      // Resolve sensitivity
-      const sensitivity: Sensitivity = params.sensitivity ?? DEFAULT_SENSITIVITY;
-
-      // Resolve model: tool param → workspace config → active session model → built-in default
-      let provider: string;
-      let modelId: string;
-      if (params.model) {
-        const slash = params.model.indexOf("/");
-        provider = slash === -1 ? DEFAULT_PROVIDER : params.model.slice(0, slash);
-        modelId  = slash === -1 ? params.model     : params.model.slice(slash + 1);
-      } else {
-        const workspaceModel = loadWorkspaceModel(ctx.cwd);
-        const sessionModel   = ctx.model;
-        provider = workspaceModel?.provider ?? sessionModel?.provider ?? DEFAULT_PROVIDER;
-        modelId  = workspaceModel?.modelId  ?? sessionModel?.id      ?? DEFAULT_MODEL_ID;
-      }
-
-      state.start(params.outcome, provider, modelId, sensitivity);
-      idleSteers = 0;
-      currentCtx = ctx;
-      updateUI(ctx, state.getState());
-
-      const { source } = loadSystemPrompt(ctx.cwd);
-      const promptLabel = source === "built-in" ? "built-in prompt" : ".pi/SUPERVISOR.md";
-
-      // Notify the user so they're aware supervision was initiated by the model
-      ctx.ui.notify(
-        `Supervisor started by agent: "${params.outcome.slice(0, 60)}${params.outcome.length > 60 ? "…" : ""}" | ${provider}/${modelId} | sensitivity: ${sensitivity} | ${promptLabel}`,
-        "info"
-      );
-
-      return text(`Supervision active. Outcome: "${params.outcome}" | ${provider}/${modelId} | sensitivity: ${sensitivity}`);
     },
   });
 }
